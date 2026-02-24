@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { fetchMapping, fetchLatestPrices, fetch5mPrices } from "@/lib/osrs-api";
+import { Prisma } from "@/generated/prisma/client";
+
+const ITEM_BATCH_SIZE = 500;
 
 export async function POST() {
   try {
@@ -11,48 +14,54 @@ export async function POST() {
       fetch5mPrices(),
     ]);
 
-    // Upsert all items from mapping
     const now = new Date();
-    let itemCount = 0;
-    let priceCount = 0;
 
-    // Batch upsert items
-    for (const item of mapping) {
-      await prisma.item.upsert({
-        where: { id: item.id },
-        create: {
-          id: item.id,
-          name: item.name,
-          examine: item.examine || null,
-          members: item.members,
-          highalch: item.highalch || null,
-          geLimit: item.limit || null,
-          icon: item.icon || null,
-        },
-        update: {
-          name: item.name,
-          examine: item.examine || null,
-          members: item.members,
-          highalch: item.highalch || null,
-          geLimit: item.limit || null,
-          icon: item.icon || null,
-        },
-      });
-      itemCount++;
+    // Batch upsert items via raw SQL INSERT ... ON CONFLICT
+    let itemCount = 0;
+    for (let i = 0; i < mapping.length; i += ITEM_BATCH_SIZE) {
+      const batch = mapping.slice(i, i + ITEM_BATCH_SIZE);
+      const params: (string | number | boolean | null)[] = [];
+      const valueClauses: string[] = [];
+
+      for (const item of batch) {
+        const offset = params.length;
+        params.push(
+          item.id,
+          item.name,
+          item.examine || null,
+          item.members,
+          item.highalch || null,
+          item.limit || null,
+          item.icon || null,
+          now.toISOString(),
+        );
+        valueClauses.push(
+          `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8}::timestamptz)`
+        );
+      }
+
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO items (id, name, examine, members, highalch, ge_limit, icon, updated_at)
+         VALUES ${valueClauses.join(", ")}
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name,
+           examine = EXCLUDED.examine,
+           members = EXCLUDED.members,
+           highalch = EXCLUDED.highalch,
+           ge_limit = EXCLUDED.ge_limit,
+           icon = EXCLUDED.icon,
+           updated_at = EXCLUDED.updated_at`,
+        ...params,
+      );
+      itemCount += batch.length;
     }
 
-    // Store price snapshots with volume data from /5m endpoint
-    const priceEntries: Array<{
-      itemId: number;
-      timestamp: Date;
-      highPrice: number | null;
-      lowPrice: number | null;
-      highVolume: number | null;
-      lowVolume: number | null;
-    }> = [];
-
+    // Build price snapshot entries (only for items that exist in mapping)
+    const itemIds = new Set(mapping.map((m) => m.id));
+    const priceEntries: Prisma.PriceSnapshotCreateManyInput[] = [];
     for (const [idStr, priceData] of Object.entries(latest.data)) {
       const itemId = parseInt(idStr, 10);
+      if (!itemIds.has(itemId)) continue;
       if (priceData.high !== null || priceData.low !== null) {
         const volumeData = fiveMin.data[idStr];
         priceEntries.push({
@@ -66,15 +75,11 @@ export async function POST() {
       }
     }
 
-    // Batch create price snapshots (skip duplicates)
-    for (const entry of priceEntries) {
-      try {
-        await prisma.priceSnapshot.create({ data: entry });
-        priceCount++;
-      } catch {
-        // Skip duplicate timestamps
-      }
-    }
+    // Batch create all price snapshots in one query
+    const created = await prisma.priceSnapshot.createMany({
+      data: priceEntries,
+      skipDuplicates: true,
+    });
 
     // Clean up snapshots older than 7 days
     const cutoffDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -85,7 +90,7 @@ export async function POST() {
     return NextResponse.json({
       success: true,
       items: itemCount,
-      prices: priceCount,
+      prices: created.count,
       cleaned: cleaned.count,
       syncedAt: now.toISOString(),
     });
