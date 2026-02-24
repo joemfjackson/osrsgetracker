@@ -88,6 +88,16 @@ export default function HomePage() {
     checkAndSync();
   }, [triggerSync, fetchFlips]);
 
+  // Re-fetch when filters or sort change (skip initial mount — handled by auto-sync)
+  const initialFetchDone = useRef(false);
+  useEffect(() => {
+    if (!initialFetchDone.current) {
+      initialFetchDone.current = true;
+      return;
+    }
+    fetchFlips();
+  }, [fetchFlips]);
+
   // Auto-refresh every 5 minutes
   useEffect(() => {
     const interval = setInterval(fetchFlips, 5 * 60 * 1000);
