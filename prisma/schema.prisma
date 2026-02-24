@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Item {
+  id        Int      @id
+  name      String
+  examine   String?
+  members   Boolean  @default(false)
+  highalch  Int?
+  geLimit   Int?     @map("ge_limit")
+  icon      String?
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  prices    PriceSnapshot[]
+  watchlist WatchlistItem[]
+
+  @@map("items")
+}
+
+model PriceSnapshot {
+  id         Int      @id @default(autoincrement())
+  itemId     Int      @map("item_id")
+  timestamp  DateTime
+  highPrice  Int?     @map("high_price")
+  lowPrice   Int?     @map("low_price")
+  highVolume Int?     @map("high_volume")
+  lowVolume  Int?     @map("low_volume")
+
+  item Item @relation(fields: [itemId], references: [id])
+
+  @@unique([itemId, timestamp])
+  @@index([timestamp])
+  @@map("price_snapshots")
+}
+
+model WatchlistItem {
+  id          Int      @id @default(autoincrement())
+  itemId      Int      @map("item_id")
+  minMargin   Int?     @map("min_margin")
+  minRoi      Float?   @map("min_roi")
+  maxBuyPrice Int?     @map("max_buy_price")
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  item Item @relation(fields: [itemId], references: [id])
+
+  @@map("watchlist_items")
+}

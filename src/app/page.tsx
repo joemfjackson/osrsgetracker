@@ -1,101 +1,164 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useState, useEffect, useCallback, useRef } from "react";
+import { FlipTable } from "@/components/FlipTable";
+import { BudgetFilter } from "@/components/BudgetFilter";
+import { ItemSearch } from "@/components/ItemSearch";
+import { SyncButton } from "@/components/SyncButton";
+import { DashboardStats } from "@/components/DashboardStats";
+import type { FlipOpportunity } from "@/lib/types";
+
+export default function HomePage() {
+  const [flips, setFlips] = useState<FlipOpportunity[]>([]);
+  const [total, setTotal] = useState(0);
+  const [lastSync, setLastSync] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const autoSyncDone = useRef(false);
+
+  // Filters
+  const [budget, setBudget] = useState("");
+  const [minRoi, setMinRoi] = useState(0);
+  const [minMargin, setMinMargin] = useState("");
+  const [minVolume, setMinVolume] = useState("");
+  const [sortBy, setSortBy] = useState("maxProfit");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const fetchFlips = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (budget) params.set("maxBuyPrice", budget);
+      if (minRoi > 0) params.set("minRoi", String(minRoi));
+      if (minMargin) params.set("minMargin", minMargin);
+      if (minVolume) params.set("minVolume", minVolume);
+      params.set("sortBy", sortBy);
+      params.set("sortDir", sortDir);
+      params.set("limit", "100");
+
+      const res = await fetch(`/api/flips?${params}`);
+      const data = await res.json();
+      setFlips(data.data || []);
+      setTotal(data.total || 0);
+      setLastSync(data.lastSync || null);
+    } catch (error) {
+      console.error("Failed to fetch flips:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [budget, minRoi, minMargin, minVolume, sortBy, sortDir]);
+
+  const triggerSync = useCallback(async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const res = await fetch("/api/sync", { method: "POST" });
+      if (res.ok) {
+        await fetchFlips();
+      }
+    } catch (error) {
+      console.error("Sync failed:", error);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [isSyncing, fetchFlips]);
+
+  // Auto-sync on mount if data is stale (>5 min) or missing
+  useEffect(() => {
+    if (autoSyncDone.current) return;
+    autoSyncDone.current = true;
+
+    async function checkAndSync() {
+      try {
+        const res = await fetch("/api/sync");
+        const data = await res.json();
+        const lastSyncTime = data.lastSync ? new Date(data.lastSync).getTime() : 0;
+        const staleThreshold = 5 * 60 * 1000; // 5 minutes
+
+        if (!lastSyncTime || Date.now() - lastSyncTime > staleThreshold) {
+          await triggerSync();
+        } else {
+          await fetchFlips();
+        }
+      } catch {
+        await fetchFlips();
+      }
+    }
+
+    checkAndSync();
+  }, [triggerSync, fetchFlips]);
+
+  // Auto-refresh every 5 minutes
+  useEffect(() => {
+    const interval = setInterval(fetchFlips, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [fetchFlips]);
+
+  const handleSort = (column: string) => {
+    if (sortBy === column) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSortBy(column);
+      setSortDir("desc");
+    }
+  };
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="https://nextjs.org/icons/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="https://nextjs.org/icons/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">
+            Flip Finder
+          </h1>
+          <p className="text-sm text-muted mt-0.5">
+            {isSyncing
+              ? "Syncing prices..."
+              : total > 0
+                ? `${total} opportunities found`
+                : "Sync prices to find flip opportunities"}
+          </p>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+        <SyncButton onSync={triggerSync} isSyncing={isSyncing} lastSync={lastSync} />
+      </div>
+
+      {/* Search */}
+      <ItemSearch />
+
+      {/* Dashboard Stats */}
+      <DashboardStats flips={flips} lastSync={lastSync} />
+
+      {/* Filters */}
+      <BudgetFilter
+        budget={budget}
+        onBudgetChange={setBudget}
+        minRoi={minRoi}
+        onMinRoiChange={setMinRoi}
+        minMargin={minMargin}
+        onMinMarginChange={setMinMargin}
+        minVolume={minVolume}
+        onMinVolumeChange={setMinVolume}
+      />
+
+      {/* Table */}
+      {isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-12 bg-surface rounded animate-pulse"
+              style={{ opacity: 1 - i * 0.1 }}
+            />
+          ))}
+        </div>
+      ) : (
+        <FlipTable
+          data={flips}
+          sortBy={sortBy}
+          sortDir={sortDir}
+          onSort={handleSort}
+        />
+      )}
     </div>
   );
 }
